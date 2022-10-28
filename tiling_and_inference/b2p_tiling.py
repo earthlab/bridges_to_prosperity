@@ -314,9 +314,6 @@ def tiling(input_rstr: str, name: str, home_dir: str, progress_file: str = None,
 
 
 if __name__ == '__main__':
-    bucket_name = 'b2p.erve'  # replace with your bucket name
-    s3 = boto3.resource('s3')
-
     logdir = tempfile.mkdtemp(prefix='b2p_logs')
     logfile = os.path.join(logdir, f'{int(time.time())}.log')
     print(f'Writing log file to {logfile}')
@@ -328,5 +325,10 @@ if __name__ == '__main__':
     parser.add_argument('--file', '-f', type=str, required=True, help='Path to tiff file')
     parser.add_argument('--cores', '-c', type=int, required=False, default=N_CORES - 1)
     parser.add_argument('--progress_file', '-p', type=str, required=False, help='Path to progress csv file')
+    parser.add_argument('--bucket_name', '-b', type=str, required=True, help='Path to AWS s3 bucket i.e. b2p.erve')
     args = parser.parse_args()
+
+    bucket_name = args.bucket_name
+    s3 = boto3.resource('s3')
+
     tiling(args.file, args.name, HOME_DIR, args.progress_file, args.cores)

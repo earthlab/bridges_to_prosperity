@@ -101,7 +101,5 @@ if __name__ == '__main__':
     parser.add_argument('--location_name', type=str, required=True, help='Location name of job')
     parser.add_argument('--outpath', type=str, required=True, help='Path to the output json file')
     args = parser.parse_args()
-    bucket_name = 'b2p.erve'  # replace with your bucket name
-    s3 = boto3.resource('s3')
     main(args.input_file, args.model_path, args.shape_path, args.tiling_dir, args.input_tiff, args.location_name,
          args.outpath)
