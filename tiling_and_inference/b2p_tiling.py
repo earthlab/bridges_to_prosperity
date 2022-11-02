@@ -1,30 +1,31 @@
 #!/usr/bin/env python
 
 import argparse
-from argparse import Namespace
+import csv
+import json
 import logging
 import multiprocessing
-from multiprocessing import Pool
-import time
-from subprocess import Popen
 import os
-from typing import List, Any
-import csv
 import tempfile
-import json
-import sys
+import time
+from argparse import Namespace
+from multiprocessing import Pool
+from typing import List, Any
 
-import numpy as np
 import boto3
+import geojson
 import geopandas as gpd
+import numpy as np
 import rasterio
+from fastai.vision import ImageList, get_transforms, load_learner, imagenet_stats
+from geojson import Polygon, FeatureCollection
 from osgeo import gdal
 from shapely.geometry import Polygon
-import geojson
-from geojson import Polygon, Feature, FeatureCollection
 
 BIN_DIR = os.path.dirname(__file__)
 
+
+# Utility functions
 
 def scale(x) -> float:
     return (x - np.nanmin(x)) * (1 / (np.nanmax(x) - np.nanmin(x)) * 255)
@@ -124,7 +125,9 @@ def batch_list(input_list: List[Any], batches: int) -> List[List[Any]]:
         yield input_list[i:i + f]
 
 
-def make_tiff_file_task(namespace: Namespace):
+# Parallel tasks
+
+def make_tiff_files_task(namespace: Namespace):
     dem = gdal.Open(namespace.output_scaled)
     gt = dem.GetGeoTransform()
     xmin = gt[0]
@@ -165,6 +168,85 @@ def make_tiff_file_task(namespace: Namespace):
     with open(namespace.geom_lookup_outfile, 'w+') as f:
         json.dump(geom_lookup, f)
 
+
+def do_inference_task(namespace: Namespace):
+    job_id = os.path.basename(namespace.output_file).split('.json')[0]
+    work_dir = os.path.dirname(namespace.output_file)
+
+    t1 = time.time()
+    # pkl file path
+    learn_infer = load_learner(path=os.path.dirname(namespace.model_path), file=os.path.basename(namespace.model_path))
+
+    tfms = get_transforms(flip_vert=True, max_lighting=0.1, max_zoom=1.05, max_warp=0.)
+    np.random.seed(42)
+
+    # tiling dir path
+    test_data = ImageList.from_folder(namespace.tiling_dir).split_none().label_empty().transform(
+        tfms, size=224, tfm_y=False).databunch().normalize(imagenet_stats)
+    test_data.train_dl.new(shuffle=False)
+    val_dict = {1: 'yes', 0: 'no'}
+    geoms = []
+
+    # input tiff file
+    sent_indx = str(namespace.input_tiff_path.split('.')[0][-3:])
+    with open(namespace.input_file, 'r') as f:
+        file_data = json.load(f)
+    ls_names = file_data['tiling_files']
+    print(f"{time.time() - t1}s setup time")
+
+    # unique name for logfile
+    log_path = os.path.join(work_dir, f'{namespace.location_name}_{sent_indx}_Inference_Progress_{job_id}.log')
+    with open(log_path, 'w+') as f:
+        f.write(f'Length of tiling files for job {len(ls_names)}\n')
+
+    # unique name for progress file
+    progress_path = os.path.join(work_dir, f'{namespace.location_name}_{sent_indx}_Inference_Progress_{job_id}.csv')
+    with open(progress_path, 'w+') as f:
+        f.write('Index,Filename,Geometry,Predicted_Label,Predicted_Value,fl_value\n')
+
+    with open(namespace.tiff_geom_path, 'r') as f:
+        geom_lookup = json.load(f)['geom_lookup']
+
+    # tiling file paths
+    for i, tiff_path in enumerate(ls_names):
+        t0 = time.time()
+        diff = None
+
+        try:
+            t1 = time.time()
+            im = test_data.train_ds[i][0]
+            prediction = learn_infer.predict(im)
+
+            pred_val = prediction[1].data.item()
+            pred_label = val_dict[pred_val]
+            fl_val = prediction[2].data[pred_val].item()
+
+            coords = geom_lookup[os.path.basename(tiff_path)]
+            geoms.append((tiff_path, coords, pred_label, pred_val, fl_val))
+
+            outline = f'{i},{tiff_path},{coords},{pred_label},{pred_val},{fl_val}\n'
+            with open(progress_path, 'a') as f:
+                f.write(outline)
+
+            diff = time.time() - t1
+
+            del im, prediction, pred_val, pred_label, fl_val
+        except Exception as e:
+            outline = str(e)
+
+        # Write info to log file
+        if diff is not None:
+            outline += f" inference time: {diff}s"
+        outline += f' Total time: {time.time() - t0}s'
+        with open(log_path, 'a') as f:
+            outline += '\n'
+            f.write(outline)
+
+    with open(namespace.output_file, 'w+') as f:
+        json.dump({'geoms': geoms}, f, indent=1)
+
+
+# Parent processes
 
 def write_tiff_files(input_rstr: str, name: str, tiling_dir: str, output_dir: str, geom_lookup_path: str,
                      cores: int, bucket_name: str = None, s3=None):
@@ -210,17 +292,18 @@ def write_tiff_files(input_rstr: str, name: str, tiling_dir: str, output_dir: st
     output_parallel_files = os.path.join(output_dir, 'tiff_parallel_output')
     os.makedirs(output_parallel_files, exist_ok=True)
 
-    pool = Pool(len(batches))
-    args = []
-    for i, batch in enumerate(batches):
-        geojson_outfile = os.path.join(output_parallel_files, f'geojson_{i}.json')
-        geom_lookup_outfile = os.path.join(output_parallel_files, f'geom_lookup_{i}.json')
-        args.append(Namespace(output_scaled=output_scaled, tiling_dir=tiling_dir, input_rstr=input_rstr,
-                              tile_start=batch[0], tile_stop=batch[1], geojson_outfile=geojson_outfile,
-                              geom_lookup_outfile=geom_lookup_outfile))
+    with Pool(len(batches)) as p:
+        args = []
+        for i, batch in enumerate(batches):
+            geojson_outfile = os.path.join(output_parallel_files, f'geojson_{i}.json')
+            geom_lookup_outfile = os.path.join(output_parallel_files, f'geom_lookup_{i}.json')
+            args.append(Namespace(output_scaled=output_scaled, tiling_dir=tiling_dir, input_rstr=input_rstr,
+                                  tile_start=batch[0], tile_stop=batch[1], geojson_outfile=geojson_outfile,
+                                  geom_lookup_outfile=geom_lookup_outfile))
 
-    for result in pool.map(make_tiff_file_task, args):
-        print(result)
+        # Block until all processes are done
+        for result in p.map(make_tiff_files_task, args):
+            print(result)
 
     # Combine the parallel output
     geom_lookup = {}
@@ -267,9 +350,9 @@ def write_tiff_files(input_rstr: str, name: str, tiling_dir: str, output_dir: st
     return dss.crs
 
 
-def perform_inference(input_rstr: str, name: str, tiling_dir: str, output_dir: str, cores: int, model_path: str,
-                      crs: rasterio.crs.CRS, geom_lookup_path: str, progress_file: str = None, bucket_name: str = None,
-                      s3=None):
+def do_inference(input_rstr: str, name: str, tiling_dir: str, output_dir: str, cores: int, model_path: str,
+                 crs: rasterio.crs.CRS, geom_lookup_path: str, progress_file: str = None, bucket_name: str = None,
+                 s3=None):
     logging.info('Starting Inference')
     np.random.seed(42)
 
@@ -292,21 +375,20 @@ def perform_inference(input_rstr: str, name: str, tiling_dir: str, output_dir: s
         batches = list(batch_list(tilling_dir_list, cores))
 
     count = 0
+    args = []
     for i, batch in enumerate(batches):
         count += len(batch)
         job_path = os.path.join(input_parallel_files, f'batch_{i}_input.json')
         with open(job_path, 'w+') as f:
             json.dump({'tiling_files': batch[:10]}, f)
         out_path = os.path.join(output_parallel_files, f'batch_{i}_output.json')
-        Popen([sys.executable, os.path.join(BIN_DIR, 'inference.py'), '--input_file', job_path,
-               '--model_path', model_path, '--tiling_dir', tiling_dir, '--input_tiff', input_rstr,
-               '--geom_lookup', geom_lookup_path, '--location_name', name, '--outpath', out_path])
-
+        args.append(Namespace(input_file=job_path, model_path=model_path, tiling_dir=tiling_dir, input_tiff=input_rstr,
+                              geom_lookup=geom_lookup_path, location_name=name, outpath=out_path))
     logging.info(f"Performing inference on {count} files")
 
-    # There are three files (output, progress csv, and logfile) being written for each subprocess
-    while len(os.listdir(output_parallel_files)) < len(batches) * 3:
-        time.sleep(15 * 60)
+    with Pool(cores) as p:
+        for result in p.map(do_inference_task, args):
+            print(result)
 
     logging.info(f'Finished creating geoms list {time.time() - t1}s')
     logging.info(f'Finished creating geoms list')
@@ -352,9 +434,8 @@ def perform_inference(input_rstr: str, name: str, tiling_dir: str, output_dir: s
     del test_gdff, pred_labels, pred_values, fl_values
 
 
-def do_inference(input_rstr: str, name: str, model_path: str, progress_file: str = None, cores: int = None,
-                 output_dir: str = None, s3_bucket_name: str = None):
-    cores = cores if cores is not None else multiprocessing.cpu_count() - 2
+def main(input_rstr: str, name: str, model_path: str, progress_file: str = None, cores: int = None,
+         output_dir: str = None, s3_bucket_name: str = None):
 
     # Create output file directories
     aoi_name = 'folder_' + input_rstr.split('.')[0][-3:]
@@ -371,12 +452,15 @@ def do_inference(input_rstr: str, name: str, model_path: str, progress_file: str
     bucket_name = s3_bucket_name
 
     geom_lookup = os.path.join(output_dir, 'tiff_geom_lookup.json')
+    cores = cores if cores is not None else multiprocessing.cpu_count() - 2
 
+    # Call parent processes for parallel tasks
     crs = write_tiff_files(input_rstr=input_rstr, name=name, tiling_dir=tiling_dir, output_dir=output_dir,
                            geom_lookup_path=geom_lookup, bucket_name=bucket_name, s3=s3, cores=cores)
-    perform_inference(input_rstr=input_rstr, name=name, tiling_dir=tiling_dir, output_dir=output_dir, cores=cores,
-                      model_path=model_path, progress_file=progress_file, crs=crs, geom_lookup_path=geom_lookup,
-                      bucket_name=bucket_name, s3=s3)
+
+    do_inference(input_rstr=input_rstr, name=name, tiling_dir=tiling_dir, output_dir=output_dir, cores=cores,
+                 model_path=model_path, progress_file=progress_file, crs=crs, geom_lookup_path=geom_lookup,
+                 bucket_name=bucket_name, s3=s3)
 
 
 if __name__ == '__main__':
@@ -385,7 +469,6 @@ if __name__ == '__main__':
     # Required args
     parser.add_argument('--file', '-f', type=str, required=True, help='Path to tiff file')
     parser.add_argument('--name', '-n', type=str, required=True, help='Name of the region')
-    # TODO: Once structure is established give this a default value
     parser.add_argument('--model', '-m', type=str, required=True, help='Path to inference model file')
 
     # Optional args
@@ -398,5 +481,5 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    do_inference(input_rstr=args.file, name=args.name, model_path=args.model, progress_file=args.progress_file,
-                 cores=args.cores, output_dir=args.out_dir, s3_bucket_name=args.bucket_name)
+    main(input_rstr=args.file, name=args.name, model_path=args.model, progress_file=args.progress_file,
+         cores=args.cores, output_dir=args.out_dir, s3_bucket_name=args.bucket_name)
