@@ -157,7 +157,7 @@ def make_tiff_files_task(namespace: Namespace):
             filenames.append(tiff_filename)
             gdal.Warp(tiff_filename, dem, outputBounds=(xmin, ymin, xmax, ymax), dstNodata=-999)
             coords = ((xmin, ymin), (xmin, ymax), (xmax, ymax), (xmax, ymin), (xmin, ymin))
-            geom_lookup[tiff_filename] = coords
+            geom_lookup[os.path.basename(tiff_filename)] = coords
             features.append([[xmin, ymin], [xmax, ymin], [xmax, ymax], [xmin, ymax], [xmin, ymin]])
 
             del xmin, xmax, ymax, ymin
@@ -185,7 +185,6 @@ def do_inference_task(namespace: Namespace):
         tfms, size=224, tfm_y=False).databunch().normalize(imagenet_stats)
     test_data.train_dl.new(shuffle=False)
     val_dict = {1: 'yes', 0: 'no'}
-    geoms = []
 
     # input tiff file
     sent_indx = str(namespace.input_tiff_path.split('.')[0][-3:])
@@ -207,6 +206,7 @@ def do_inference_task(namespace: Namespace):
     with open(namespace.tiff_geom_path, 'r') as f:
         geom_lookup = json.load(f)['geom_lookup']
 
+    geoms = []
     # tiling file paths
     for i, tiff_path in enumerate(ls_names):
         t0 = time.time()

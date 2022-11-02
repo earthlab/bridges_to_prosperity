@@ -24,7 +24,6 @@ def do_inference(input_file: str, model_path: str, tiling_dir: str, input_tiff_p
         tfms, size=224, tfm_y=False).databunch().normalize(imagenet_stats)
     test_data.train_dl.new(shuffle=False)
     val_dict = {1: 'yes', 0: 'no'}
-    geoms = []
 
     # input tiff file
     sent_indx = str(input_tiff_path.split('.')[0][-3:])
@@ -46,6 +45,7 @@ def do_inference(input_file: str, model_path: str, tiling_dir: str, input_tiff_p
     with open(tiff_geom_path, 'r') as f:
         geom_lookup = json.load(f)['geom_lookup']
 
+    geoms = []
     # tiling file paths
     for i, tiff_path in enumerate(ls_names):
         t0 = time.time()
