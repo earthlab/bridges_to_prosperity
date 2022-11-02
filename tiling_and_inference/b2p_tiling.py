@@ -20,25 +20,12 @@ from osgeo import gdal
 from shapely.geometry import Polygon
 import geojson
 from geojson import Polygon, Feature, FeatureCollection
-from contextlib import redirect_stdout, redirect_stderr, ExitStack
 
 BIN_DIR = os.path.dirname(__file__)
 
 
 def scale(x) -> float:
     return (x - np.nanmin(x)) * (1 / (np.nanmax(x) - np.nanmin(x)) * 255)
-
-
-@contextmanager
-def suppress(out=True, err=False):
-    with ExitStack() as stack:
-        with open(os.devnull, "w") as null:
-            if out:
-                stack.enter_context(redirect_stdout(null))
-            if err:
-                stack.enter_context(redirect_stderr(null))
-            yield
-
 
 def progress_tiff_list(filename: str) -> List[str]:
     """
