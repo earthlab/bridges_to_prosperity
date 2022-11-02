@@ -264,7 +264,7 @@ def perform_inference(input_rstr: str, name: str, tiling_dir: str, output_dir: s
         count += len(batch)
         job_path = os.path.join(input_parallel_files, f'batch_{i}_input.json')
         with open(job_path, 'w+') as f:
-            json.dump({'tiling_files': batch}, f)
+            json.dump({'tiling_files': batch[:10]}, f)
         out_path = os.path.join(output_parallel_files, f'batch_{i}_output.json')
         Popen([sys.executable, os.path.join(BIN_DIR, 'inference.py'), '--input_file', job_path,
                '--model_path', model_path, '--tiling_dir', tiling_dir, '--input_tiff', input_rstr,
