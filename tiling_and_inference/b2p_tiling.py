@@ -173,6 +173,10 @@ def write_tiff_files(input_rstr: str, name: str, tiling_dir: str, output_dir: st
                '--tiling_dir', tiling_dir, '--input_tiff', input_rstr, '--tile_start', str(batch[0]), '--tile_stop',
                str(batch[1]), '--geojson_outpath', geojson_outfile, '--geom_lookup_outpath', geom_lookup_outfile])
 
+    # There are two files being written for each subprocess
+    while len(os.listdir(output_parallel_files)) < len(batches) * 2:
+        time.sleep(2 * 60)
+
     # Combine all of the parallel output
     geom_lookup = {}
     features = []
