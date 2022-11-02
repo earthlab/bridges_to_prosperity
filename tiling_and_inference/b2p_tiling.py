@@ -122,7 +122,7 @@ def batch_list(input_list: List[Any], batches: int) -> List[List[Any]]:
 
 
 def write_tiff_files(input_rstr: str, name: str, tiling_dir: str, output_dir: str, geom_lookup_path: str,
-                     bucket_name: str = None, s3=None):
+                     cores: int, bucket_name: str = None, s3=None):
     """
 
     """
@@ -154,55 +154,52 @@ def write_tiff_files(input_rstr: str, name: str, tiling_dir: str, output_dir: st
 
     if bucket_name is not None and s3 is not None:
         s3.Bucket(bucket_name).upload_file(output_scaled, name + '_' + output_scaled)
-
     del r, g, b, true
 
-    dem = gdal.Open(output_scaled)
-    gt = dem.GetGeoTransform()
-    xmin = gt[0]
-    ymax = gt[3]
-    res = gt[1]
-
-    xlen = res * dem.RasterXSize
-    ylen = res * dem.RasterYSize
     div = 366
-    xsize = xlen / div
-    ysize = ylen / div
-    xsteps = [xmin + xsize * i for i in range(div + 1)]
-    ysteps = [ymax - ysize * i for i in range(div + 1)]
+    batch_space = np.linspace(0, div, cores + 1)
+    batches = []
+    for i in range(1, len(batch_space)):
+        batches.append((int(batch_space[i-1]), int(batch_space[i])))
 
-    del gt, xmin, ymax, res, xlen, ylen
+    output_parallel_files = os.path.join(output_dir, 'tiff_parallel_output')
+    os.makedirs(output_parallel_files, exist_ok=True)
+
+    for i, batch in enumerate(batches):
+        geojson_outfile = os.path.join(output_parallel_files, f'geojson_{i}.json')
+        geom_lookup_outfile = os.path.join(output_parallel_files, f'geom_lookup_{i}.json')
+
+        Popen([sys.executable, os.path.join(BIN_DIR, 'make_tiff_files.py'), '--output_scaled', output_scaled,
+               '--tiling_dir', tiling_dir, '--input_tiff', input_rstr, '--tile_start', str(batch[0]), '--tile_stop',
+               str(batch[1]), '--geojson_outpath', geojson_outfile, '--geom_lookup_outpath', geom_lookup_outfile])
+
+    # Combine all of the parallel output
     geom_lookup = {}
     features = []
-    filenames = []
-    for i in range(div):
-        for j in range(div):
-            xmin = xsteps[i]
-            xmax = xsteps[i + 1]
-            ymax = ysteps[j]
-            ymin = ysteps[j + 1]
-            tiff_filename = os.path.join(tiling_dir, 'dem' + input_rstr.split('.')[0][-3:] + str(i) + '_' + str(j) +
-                                         '.tif')
-            filenames.append(tiff_filename)
-            gdal.Warp(tiff_filename, dem, outputBounds=(xmin, ymin, xmax, ymax), dstNodata=-999)
-            coords = ((xmin, ymin), (xmin, ymax), (xmax, ymax), (xmax, ymin), (xmin, ymin))
-            geom_lookup[tiff_filename] = coords
-            features.append(
-                {
-                    "type": "Feature",
-                    "properties": {},
-                    "geometry": {
-                        "type": "Polygon",
-                        "coordinates": [
-                            [[xmin, ymin], [xmax, ymin], [xmax, ymax], [xmin, ymax], [xmin, ymin]]
-                        ]
-                    }
-                }
-            )
-            del xmin, xmax, ymax, ymin
+    for file in os.listdir(output_parallel_files):
+        file_path = os.path.join(output_parallel_files, file)
+        if file.startswith('geojson'):
+            with open(file_path, 'r') as f:
+                file_features = json.load(f)['features']
+                for feature in file_features:
+                    features.append(
+                        {
+                            "type": "Feature",
+                            "properties": {},
+                            "geometry": {
+                                "type": "Polygon",
+                                "coordinates": [feature]
+                            }
+                        }
+                    )
 
-    print(f'tiff {len(filenames)}, {len(set(filenames))}')
+        elif file.startswith('geom_lookup'):
+            with open(file_path, 'r') as f:
+                geoms = json.load(f)
+                for geom in geoms:
+                    geom_lookup[geom] = geoms[geom]
 
+    # Write the output files
     with open(geom_lookup_path, 'w+') as f:
         json.dump({'geom_lookup': geom_lookup}, f)
 
@@ -215,7 +212,6 @@ def write_tiff_files(input_rstr: str, name: str, tiling_dir: str, output_dir: st
         }
         geojson.dump(FeatureCollection(features, crs=crs), f)
 
-    del dem, div, xsteps, ysteps
     logging.info(f'Wrote tiff files in {time.time() - t1}s')
     print(f'Wrote tiff files to {tiling_dir}')
 
@@ -330,7 +326,7 @@ def do_inference(input_rstr: str, name: str, model_path: str, progress_file: str
     geom_lookup = os.path.join(output_dir, 'tiff_geom_lookup.json')
 
     crs = write_tiff_files(input_rstr=input_rstr, name=name, tiling_dir=tiling_dir, output_dir=output_dir,
-                           geom_lookup_path=geom_lookup, bucket_name=bucket_name, s3=s3)
+                           geom_lookup_path=geom_lookup, bucket_name=bucket_name, s3=s3, cores=cores)
     perform_inference(input_rstr=input_rstr, name=name, tiling_dir=tiling_dir, output_dir=output_dir, cores=cores,
                       model_path=model_path, progress_file=progress_file, crs=crs, geom_lookup_path=geom_lookup,
                       bucket_name=bucket_name, s3=s3)

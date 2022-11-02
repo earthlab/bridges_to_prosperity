@@ -7,8 +7,8 @@ from fastai.vision import ImageList, get_transforms, load_learner, imagenet_stat
 import time
 
 
-def main(input_file: str, model_path: str, tiling_dir: str, input_tiff_path: str, location_name: str,
-         tiff_geom_path: str, output_file: str):
+def do_inference(input_file: str, model_path: str, tiling_dir: str, input_tiff_path: str, location_name: str,
+                 tiff_geom_path: str, output_file: str):
     job_id = os.path.basename(output_file).split('.json')[0]
     work_dir = os.path.dirname(output_file)
 
@@ -95,4 +95,5 @@ if __name__ == '__main__':
     parser.add_argument('--location_name', type=str, required=True, help='Location name of job')
     parser.add_argument('--outpath', type=str, required=True, help='Path to the output json file')
     args = parser.parse_args()
-    main(args.input_file, args.model_path, args.tiling_dir, args.input_tiff, args.location_name, args.outpath)
+    do_inference(args.input_file, args.model_path, args.tiling_dir, args.input_tiff, args.location_name, args.geom_lookup,
+                 args.outpath)
