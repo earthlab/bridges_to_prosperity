@@ -387,7 +387,6 @@ def do_inference(input_rstr: str, name: str, tiling_dir: str, output_dir: str, c
                               output_file=out_path))
     logging.info(f"Performing inference on {count} files")
 
-    multiprocessing.set_start_method('spawn')
     with Pool(cores) as p:
         for result in p.map(do_inference_task, args):
             print(result)
@@ -466,6 +465,7 @@ def main(input_rstr: str, name: str, model_path: str, progress_file: str = None,
 
 
 if __name__ == '__main__':
+    multiprocessing.set_start_method('spawn')
     parser = argparse.ArgumentParser()
 
     # Required args
