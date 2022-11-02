@@ -1,12 +1,14 @@
 #!/usr/bin/env python
 import argparse
-from fastai.vision import *
+import os
+import numpy as np
+import json
+from fastai.vision import ImageList, get_transforms, load_learner, imagenet_stats
 import time
-import geojson
 
 
-def main(input_file: str, model_path: str, tiling_dir: str, input_tiff_path: str, tiff_geometries_path: str,
-         location_name: str, output_file: str):
+def main(input_file: str, model_path: str, tiling_dir: str, input_tiff_path: str, location_name: str,
+         tiff_geom_path: str, output_file: str):
     job_id = os.path.basename(output_file).split('.json')[0]
     work_dir = os.path.dirname(output_file)
 
@@ -31,21 +33,24 @@ def main(input_file: str, model_path: str, tiling_dir: str, input_tiff_path: str
     ls_names = file_data['tiling_files']
     print(f"{time.time() - t1}s setup time")
 
-    # unique name for progress csv
+    # unique name for logfile
     log_path = os.path.join(work_dir, f'{location_name}_{sent_indx}_Inference_Progress_{job_id}.log')
     with open(log_path, 'w+') as f:
         f.write(f'Length of tiling files for job {len(ls_names)}\n')
 
-    # Read in tiff bounding boxes
-    with open(tiff_geometries_path, 'r') as f:
-        tiff_geometries = geojson.load(f)['geoms']
+    # unique name for progress file
+    progress_path = os.path.join(work_dir, f'{location_name}_{sent_indx}_Inference_Progress_{job_id}.csv')
+    with open(progress_path, 'w+') as f:
+        f.write('Index,Filename,Geometry,Predicted_Label,Predicted_Value,fl_value\n')
+
+    with open(tiff_geom_path, 'r') as f:
+        geom_lookup = json.load(f)['geom_lookup']
 
     # tiling file paths
     for i, tiff_path in enumerate(ls_names):
         t0 = time.time()
         diff = None
 
-        tiff_name = os.path.basename(tiff_path)
         try:
             t1 = time.time()
             im = test_data.train_ds[i][0]
@@ -55,24 +60,29 @@ def main(input_file: str, model_path: str, tiling_dir: str, input_tiff_path: str
             pred_label = val_dict[pred_val]
             fl_val = prediction[2].data[pred_val].item()
 
-            geom_bounds = tiff_geometries[tiff_name]
-            geoms.append((tiff_path, geom_bounds, pred_label, pred_val, fl_val))
-            with open(output_file, 'w+') as f:
-                geojson.dump({'geoms': geoms}, f, indent=1)
+            coords = geom_lookup[os.path.basename(tiff_path)]
+            geoms.append((tiff_path, coords, pred_label, pred_val, fl_val))
 
-            outline = f'{i},{tiff_path},{geom_bounds},{pred_label},{pred_val},{fl_val}'
+            outline = f'{i},{tiff_path},{coords},{pred_label},{pred_val},{fl_val}\n'
+            with open(progress_path, 'a') as f:
+                f.write(outline)
+
             diff = time.time() - t1
 
             del im, prediction, pred_val, pred_label, fl_val
         except Exception as e:
             outline = str(e)
 
+        # Write info to log file
         if diff is not None:
             outline += f" inference time: {diff}s"
         outline += f' Total time: {time.time() - t0}s'
         with open(log_path, 'a') as f:
             outline += '\n'
             f.write(outline)
+
+    with open(output_file, 'w+') as f:
+        json.dump({'geoms': geoms}, f, indent=1)
 
 
 if __name__ == '__main__':
@@ -81,9 +91,8 @@ if __name__ == '__main__':
     parser.add_argument('--model_path', type=str, required=True, help='Path to ML model')
     parser.add_argument('--tiling_dir', type=str, required=True, help='Path to tiling directory')
     parser.add_argument('--input_tiff', type=str, required=True, help='Path to input tiff file')
-    parser.add_argument('--geom_path', type=str, required=True, help='Path to the tiff geometries file')
+    parser.add_argument('--geom_lookup', type=str, required=True, help='Path to tiff geometry lookup json file')
     parser.add_argument('--location_name', type=str, required=True, help='Location name of job')
     parser.add_argument('--outpath', type=str, required=True, help='Path to the output json file')
     args = parser.parse_args()
-    main(args.input_file, args.model_path, args.tiling_dir, args.geom_path, args.input_tiff, args.location_name,
-         args.outpath)
+    main(args.input_file, args.model_path, args.tiling_dir, args.input_tiff, args.location_name, args.outpath)

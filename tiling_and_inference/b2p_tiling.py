@@ -5,11 +5,17 @@ import logging
 import multiprocessing
 import time
 from subprocess import Popen
+import os
+from typing import List, Any
+import csv
+import tempfile
+import json
+import sys
 
+import numpy as np
 import boto3
 import geopandas as gpd
 import rasterio
-from fastai.vision import *
 from osgeo import gdal
 from shapely.geometry import Polygon
 import geojson
@@ -128,7 +134,8 @@ def batch_list(input_list: List[Any], batches: int) -> List[List[Any]]:
         yield input_list[i:i + f]
 
 
-def write_tiff_files(input_rstr: str, name: str, tiling_dir: str, output_dir: str, bucket_name: str = None, s3=None):
+def write_tiff_files(input_rstr: str, name: str, tiling_dir: str, output_dir: str, geom_lookup_path: str,
+                     bucket_name: str = None, s3=None):
     """
 
     """
@@ -178,7 +185,7 @@ def write_tiff_files(input_rstr: str, name: str, tiling_dir: str, output_dir: st
     ysteps = [ymax - ysize * i for i in range(div + 1)]
 
     del gt, xmin, ymax, res, xlen, ylen
-    geoms = {}
+    geom_lookup = {}
     features = []
     filenames = []
     for i in range(div):
@@ -187,11 +194,12 @@ def write_tiff_files(input_rstr: str, name: str, tiling_dir: str, output_dir: st
             xmax = xsteps[i + 1]
             ymax = ysteps[j]
             ymin = ysteps[j + 1]
-            tiff_filename = os.path.join(tiling_dir, 'dem' + input_rstr.split('.')[0][-3:] + str(i) + str(j) + '.tif')
+            tiff_filename = os.path.join(tiling_dir, 'dem' + input_rstr.split('.')[0][-3:] + str(i) + '_' + str(j) +
+                                         '.tif')
             filenames.append(tiff_filename)
             gdal.Warp(tiff_filename, dem, outputBounds=(xmin, ymin, xmax, ymax), dstNodata=-999)
-            coords = ((xmin, ymin), (xmax, ymin), (xmax, ymax), (xmin, ymax))
-            geoms[tiff_filename] = {'geometry': Polygon(coords)}
+            coords = ((xmin, ymin), (xmin, ymax), (xmax, ymax), (xmax, ymin), (xmin, ymin))
+            geom_lookup[tiff_filename] = coords
             features.append(
                 {
                     "type": "Feature",
@@ -208,8 +216,8 @@ def write_tiff_files(input_rstr: str, name: str, tiling_dir: str, output_dir: st
 
     print(f'tiff {len(filenames)}, {len(set(filenames))}')
 
-    with open(os.path.join(output_dir, 'tiff_geoms.geojson'), 'w+') as f:
-        geojson.dump({'geoms': geoms}, f)
+    with open(geom_lookup_path, 'w+') as f:
+        json.dump({'geom_lookup': geom_lookup}, f)
 
     with open(os.path.join(output_dir, 'plotting_geoms.geojson'), 'w+') as f:
         crs = {
@@ -228,7 +236,8 @@ def write_tiff_files(input_rstr: str, name: str, tiling_dir: str, output_dir: st
 
 
 def perform_inference(input_rstr: str, name: str, tiling_dir: str, output_dir: str, cores: int, model_path: str,
-                      crs: rasterio.crs.CRS, progress_file: str = None, bucket_name: str = None, s3=None):
+                      crs: rasterio.crs.CRS, geom_lookup_path: str, progress_file: str = None, bucket_name: str = None,
+                      s3=None):
     logging.info('Starting Inference')
     np.random.seed(42)
 
@@ -258,8 +267,8 @@ def perform_inference(input_rstr: str, name: str, tiling_dir: str, output_dir: s
             json.dump({'tiling_files': batch}, f)
         out_path = os.path.join(output_parallel_files, f'batch_{i}_output.json')
         Popen([sys.executable, os.path.join(BIN_DIR, 'inference.py'), '--input_file', job_path,
-               '--model_path', model_path, '--tiling_dir', tiling_dir, '--input_tiff', input_rstr, '--location_name',
-               name, '--crs', str(crs), '--outpath', out_path])
+               '--model_path', model_path, '--tiling_dir', tiling_dir, '--input_tiff', input_rstr,
+               '--geom_lookup', geom_lookup_path, '--location_name', name, '--outpath', out_path])
 
     logging.info(f"Performing inference on {count} files")
 
@@ -277,11 +286,9 @@ def perform_inference(input_rstr: str, name: str, tiling_dir: str, output_dir: s
         with open(os.path.join(output_parallel_files, file), 'r') as f:
             file_data = json.load(f)
             for geom in file_data['geoms']:
-                geometry = Polygon(geom[1]['coordinates'][0])
+                geometry = Polygon(geom[1])
                 geoms.append((geom[0], geometry, geom[2], geom[3], geom[4]))
 
-    # TODO: In the future progress files will just be the geojson that are output from the subprocesses. So turn any
-    #  existing CSV progress files into the same geojson file and then update the addition of its contents to geoms here
     if progress_file is not None:
         geoms += polygon_inference_file_to_list(progress_file, tiff_dir=tiling_dir)
 
@@ -333,10 +340,12 @@ def do_inference(input_rstr: str, name: str, model_path: str, progress_file: str
     s3 = boto3.resource('s3')
     bucket_name = s3_bucket_name
 
+    geom_lookup = os.path.join(output_dir, 'tiff_geom_lookup.json')
+
     crs = write_tiff_files(input_rstr=input_rstr, name=name, tiling_dir=tiling_dir, output_dir=output_dir,
-                           bucket_name=bucket_name, s3=s3)
+                           geom_lookup_path=geom_lookup, bucket_name=bucket_name, s3=s3)
     perform_inference(input_rstr=input_rstr, name=name, tiling_dir=tiling_dir, output_dir=output_dir, cores=cores,
-                      model_path=model_path, progress_file=progress_file, crs=crs,
+                      model_path=model_path, progress_file=progress_file, crs=crs, geom_lookup_path=geom_lookup,
                       bucket_name=bucket_name, s3=s3)
 
 
