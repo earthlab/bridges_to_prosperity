@@ -26,7 +26,7 @@ def make_tiff_files(output_scaled: str, tiling_dir: str, input_rstr: str, tile_s
     features = []
     filenames = []
     for i in range(tile_start, tile_stop):
-        for j in range(tile_start, tile_stop):
+        for j in range(div):
             xmin = xsteps[i]
             xmax = xsteps[i + 1]
             ymax = ysteps[j]

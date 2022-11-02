@@ -315,8 +315,6 @@ def do_inference(input_rstr: str, name: str, model_path: str, progress_file: str
     aoi_name = 'folder_' + input_rstr.split('.')[0][-3:]
     output_dir = output_dir if output_dir is not None else tempfile.mkdtemp(prefix=f'b2p_{aoi_name}')
     tiling_dir = os.path.join(output_dir, f'Tilling_tiff_{aoi_name}_{name}')
-    shape_dir = os.path.join(output_dir, f'Tilling_shp_{aoi_name}_{name}')
-    os.makedirs(shape_dir, exist_ok=True)
     os.makedirs(tiling_dir, exist_ok=True)
 
     # Configure logging
