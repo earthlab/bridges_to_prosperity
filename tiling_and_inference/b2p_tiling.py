@@ -380,7 +380,7 @@ def do_inference(input_rstr: str, name: str, tiling_dir: str, output_dir: str, c
         count += len(batch)
         job_path = os.path.join(input_parallel_files, f'batch_{i}_input.json')
         with open(job_path, 'w+') as f:
-            json.dump({'tiling_files': batch[:10]}, f)
+            json.dump({'tiling_files': batch}, f)
         out_path = os.path.join(output_parallel_files, f'batch_{i}_output.json')
         args.append(Namespace(input_file=job_path, model_path=model_path, tiling_dir=tiling_dir,
                               input_tiff_path=input_rstr, tiff_geom_path=geom_lookup_path, location_name=name,
