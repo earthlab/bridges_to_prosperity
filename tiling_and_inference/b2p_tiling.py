@@ -350,11 +350,13 @@ def write_tiff_files(input_rstr: str, name: str, tiling_dir: str, output_dir: st
     return dss.crs
 
 
-def do_inference(input_rstr: str, name: str, tiling_dir: str, output_dir: str, cores: int, model_path: str,
+def do_inference(input_rstr: str, name: str, tiling_dir: str, output_dir: str, model_path: str,
                  crs: rasterio.crs.CRS, geom_lookup_path: str, progress_file: str = None, bucket_name: str = None,
                  s3=None):
     logging.info('Starting Inference')
     np.random.seed(42)
+
+    cores = 2 if multiprocessing.cpu_count() > 2 else 1
 
     # Create input and output directories for parallelization i/o
     input_parallel_files = os.path.join(output_dir, 'inference_parallel_input')
@@ -459,7 +461,7 @@ def main(input_rstr: str, name: str, model_path: str, progress_file: str = None,
     crs = write_tiff_files(input_rstr=input_rstr, name=name, tiling_dir=tiling_dir, output_dir=output_dir,
                            geom_lookup_path=geom_lookup, bucket_name=bucket_name, s3=s3, cores=cores)
 
-    do_inference(input_rstr=input_rstr, name=name, tiling_dir=tiling_dir, output_dir=output_dir, cores=cores,
+    do_inference(input_rstr=input_rstr, name=name, tiling_dir=tiling_dir, output_dir=output_dir,
                  model_path=model_path, progress_file=progress_file, crs=crs, geom_lookup_path=geom_lookup,
                  bucket_name=bucket_name, s3=s3)
 
