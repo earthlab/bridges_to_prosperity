@@ -1,17 +1,16 @@
-import os
-import subprocess as sp
 import getpass
-import pathlib
-from typing import List, Tuple
-from datetime import datetime, timedelta
-from argparse import Namespace
 import multiprocessing as mp
-import tqdm
-import geojson
+import os
+import pathlib
+import subprocess as sp
+from argparse import Namespace
+from datetime import datetime, timedelta
+from typing import List, Tuple
 
 import boto3
+import geojson
+import tqdm
 from shapely.geometry import Polygon
-
 
 PATH = os.path.dirname(__file__)
 

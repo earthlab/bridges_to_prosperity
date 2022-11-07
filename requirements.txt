@@ -1,12 +1,10 @@
 fastai==1.0.61
-raster2xyz
-sentinelsat
 boto3
 geopandas
 shapely
 numpy
 rasterio
 GDAL
-pandas
 rioxarray
-glob2
+tqdm
+geojson
